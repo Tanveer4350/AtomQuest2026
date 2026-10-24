@@ -1,0 +1,1 @@
+"""FanIQ backend application."""

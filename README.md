@@ -6,7 +6,43 @@
 
 The project aims to demonstrate a smarter approach to fan management through rule-based automation, user preference adaptation, and simulated energy-use analytics. Its initial prototype focuses on a virtual room and fan environment, allowing the proposed automation logic to be demonstrated and tested without requiring physical hardware.
 
-> **Project status:** Proposed software prototype. Performance targets and energy estimates must be validated through implementation and testing. The initial version does not directly control a physical fan.
+> **Project status:** Working software prototype. This repository includes a persistent FastAPI backend, deterministic rule engine, SQLite history, energy estimates, automated tests, and a responsive React dashboard. It does not directly control a physical fan.
+
+## ✅ Run the implemented project
+
+### Backend
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate       # Windows: .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+```
+
+The API and interactive documentation are available at `http://localhost:8000` and `http://localhost:8000/docs`.
+
+### Frontend
+
+In a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The dashboard uses `http://localhost:8000` by default. Set `VITE_API_BASE_URL` before starting Vite when the API is hosted elsewhere. Run backend tests with `PYTHONPATH=backend python -m pytest backend/tests -q` and create a production bundle with `npm run build --prefix frontend`.
+
+### Implemented API
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/health` | Service health check |
+| POST | `/api/recommendations` | Validate conditions, evaluate rules, and persist a recommendation |
+| GET | `/api/history` | Retrieve recent decisions |
+| DELETE | `/api/history` | Clear local decision history |
+| POST | `/api/energy` | Calculate scenario estimates from stated power assumptions |
 
 ---
 
