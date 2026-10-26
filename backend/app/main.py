@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import clear_decisions, init_db, list_decisions, save_decision
@@ -34,6 +34,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class RealtimeClients:
+    def __init__(self) -> None:
+        self.connections: set[WebSocket] = set()
+
+    async def connect(self, websocket: WebSocket) -> None:
+        await websocket.accept()
+        self.connections.add(websocket)
+
+    def disconnect(self, websocket: WebSocket) -> None:
+        self.connections.discard(websocket)
+
+    async def broadcast(self, payload: dict) -> None:
+        disconnected = []
+        for websocket in self.connections:
+            try:
+                await websocket.send_json(payload)
+            except (WebSocketDisconnect, RuntimeError):
+                disconnected.append(websocket)
+        for websocket in disconnected:
+            self.disconnect(websocket)
+
+
+realtime_clients = RealtimeClients()
 # Create the local database for scripts and test clients that do not run lifespan.
 init_db()
 
@@ -43,8 +68,18 @@ def health() -> dict[str, str]:
     return {"status": "ok", "service": "faniq-api"}
 
 
+@app.websocket("/api/realtime")
+async def realtime(websocket: WebSocket) -> None:
+    await realtime_clients.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        realtime_clients.disconnect(websocket)
+
+
 @app.post("/api/recommendations", response_model=DecisionRecord)
-def create_recommendation(request: RecommendationRequest) -> DecisionRecord:
+async def create_recommendation(request: RecommendationRequest) -> DecisionRecord:
     base, final = recommend(request)
     recommendation = Recommendation(
         state=final.state,
@@ -54,7 +89,9 @@ def create_recommendation(request: RecommendationRequest) -> DecisionRecord:
         feedback_applied=request.feedback if request.apply_feedback else None,
         created_at=datetime.now(timezone.utc),
     )
-    return save_decision(request, recommendation)
+    result = save_decision(request, recommendation)
+    await realtime_clients.broadcast({"type": "recommendation", "data": result.model_dump(mode="json")})
+    return result
 
 
 @app.get("/api/history", response_model=list[DecisionRecord])

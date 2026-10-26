@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
@@ -12,6 +12,12 @@ function App() {
   const [energy, setEnergy] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [realtime, setRealtime] = useState(false);
+  const [bluetoothDevice, setBluetoothDevice] = useState(null);
+  const [bluetoothServices, setBluetoothServices] = useState([]);
+  const [writableCharacteristic, setWritableCharacteristic] = useState(null);
+  const [bluetoothMessage, setBluetoothMessage] = useState('');
+  const socketRef = useRef(null);
 
   const loadHistory = async () => {
     try {
@@ -22,10 +28,29 @@ function App() {
   };
   useEffect(() => { loadHistory(); }, []);
   useEffect(() => {
+    const socketUrl = `${API.replace(/^http/, 'ws')}/api/realtime`;
+    const socket = new WebSocket(socketUrl);
+    socketRef.current = socket;
+    socket.onopen = () => setRealtime(true);
+    socket.onclose = () => setRealtime(false);
+    socket.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      if (message.type === 'recommendation') {
+        setDecision(message.data);
+        setHistory((current) => [message.data, ...current.filter((item) => item.id !== message.data.id)].slice(0, 12));
+      }
+    };
+    return () => { socket.close(); socketRef.current = null; };
+  }, []);
+  useEffect(() => {
     fetch(`${API}/api/energy`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hours: 5 }) })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('Energy estimate unavailable.')))
       .then(setEnergy).catch(() => setEnergy(null));
   }, []);
+  useEffect(() => {
+    const timer = setTimeout(() => recommend(), 350);
+    return () => clearTimeout(timer);
+  }, [inputs.temperature_c, inputs.humidity_percent, inputs.occupied, inputs.quiet_hours, inputs.feedback]);
 
   const recommend = async () => {
     setLoading(true); setError('');
@@ -37,14 +62,79 @@ function App() {
     finally { setLoading(false); }
   };
   const update = (key, value) => setInputs((current) => ({ ...current, [key]: value }));
+  const connectBluetooth = async () => {
+    if (!navigator.bluetooth) {
+      setBluetoothMessage('Web Bluetooth is unavailable. Use Chrome or Edge over HTTPS (or localhost).');
+      return;
+    }
+    try {
+      setBluetoothMessage('Choose an Atomberg fan in the browser dialog...');
+      const device = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: 'Atomberg' }],
+        optionalServices: ['battery_service', 'device_information'],
+      });
+      device.addEventListener('gattserverdisconnected', () => {
+        setBluetoothDevice(null);
+        setBluetoothServices([]);
+        setWritableCharacteristic(null);
+        setBluetoothMessage('Fan disconnected.');
+      });
+      const server = await device.gatt.connect();
+      const services = await server.getPrimaryServices();
+      const discovered = [];
+      const writable = [];
+      for (const service of services) {
+        const characteristics = await service.getCharacteristics();
+        discovered.push({
+          uuid: service.uuid,
+          characteristics: characteristics.map((characteristic) => ({
+            uuid: characteristic.uuid,
+            properties: Object.keys(characteristic.properties).filter((key) => characteristic.properties[key]),
+            characteristic,
+          })),
+        });
+        for (const characteristic of characteristics) {
+          if (characteristic.properties.write || characteristic.properties.writeWithoutResponse) {
+            writable.push({ serviceUuid: service.uuid, characteristic });
+          }
+          if (characteristic.properties.notify || characteristic.properties.indicate) {
+            await characteristic.startNotifications();
+            characteristic.addEventListener('characteristicvaluechanged', (event) => {
+              const value = event.target.value;
+              const bytes = new Uint8Array(value.buffer);
+              setBluetoothMessage(`Telemetry received: ${Array.from(bytes).map((byte) => byte.toString(16).padStart(2, '0')).join(' ')}`);
+            });
+          }
+        }
+      }
+      setBluetoothDevice(device);
+      setBluetoothServices(discovered.map((service) => ({
+        ...service,
+        characteristics: service.characteristics.map(({ characteristic: _, ...metadata }) => metadata),
+      })));
+      setWritableCharacteristic(writable[0] || null);
+      setBluetoothMessage(writable.length
+        ? `${device.name || 'BLE device'} connected. A writable BLE characteristic was found, but no Atomberg command protocol is known.`
+        : `${device.name || 'BLE device'} connected. No writable control characteristic was advertised.`);
+    } catch (e) {
+      if (e.name !== 'NotFoundError') setBluetoothMessage(`Bluetooth connection failed: ${e.message}`);
+    }
+  };
+  const disconnectBluetooth = () => {
+    if (bluetoothDevice?.gatt?.connected) bluetoothDevice.gatt.disconnect();
+    setBluetoothDevice(null);
+    setBluetoothServices([]);
+    setWritableCharacteristic(null);
+  };
   const currentState = decision?.recommendation?.state || 'off';
   const stateIndex = states.indexOf(currentState);
 
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><span className="brand-mark">◌</span><span>Fan<span className="accent">IQ</span></span></div><div className="live-pill"><span className="pulse" /> SIMULATOR ONLINE</div></header>
+    <header className="topbar"><div className="brand"><span className="brand-mark">◌</span><span>Fan<span className="accent">IQ</span></span></div><div className="live-pill"><span className="pulse" /> {realtime ? 'REALTIME ONLINE' : 'CONNECTING...'}</div></header>
     <main className="content">
       <section className="hero"><div><p className="eyebrow">SMART HOME / TRACK 01</p><h1>Climate intelligence,<br /><span className="accent">made visible.</span></h1><p className="lede">Simulate room conditions and let FanIQ recommend an explainable, comfort-aware airflow setting in real time.</p></div><div className="hero-stat"><strong>5</strong><span>FAN STATES<br />AVAILABLE</span></div></section>
       {error && <div className="alert">{error}</div>}
+      <section className="panel bluetooth-panel"><div className="panel-heading"><div><p className="eyebrow">DEVICE LINK</p><h2>Nearby Atomberg fan</h2></div><span className={`badge ${bluetoothDevice ? 'connected-badge' : ''}`}>{bluetoothDevice ? 'CONNECTED' : 'BLUETOOTH'}</span></div><p className="muted">Connect from a secure browser session to inspect BLE services. Control is enabled only for a documented model protocol; FanIQ never sends guessed bytes to a motor controller.</p><div className="bluetooth-actions"><button className="primary-button" onClick={bluetoothDevice ? disconnectBluetooth : connectBluetooth}>{bluetoothDevice ? 'Disconnect fan' : 'Scan and connect  →'}</button>{bluetoothDevice && <span className="device-name">{bluetoothDevice.name || 'BLE device'} · {bluetoothServices.reduce((count, service) => count + service.characteristics.length, 0)} characteristics</span>}</div>{bluetoothMessage && <p className="bluetooth-message">{bluetoothMessage}</p>}{bluetoothDevice && writableCharacteristic && <p className="bluetooth-message">Writable characteristic found ({writableCharacteristic.characteristic.uuid}); model command mapping is required before control can be enabled.</p>}</section>
       <div className="dashboard-grid">
         <section className="panel controls"><div className="panel-heading"><div><p className="eyebrow">VIRTUAL ROOM</p><h2>Room conditions</h2></div><span className="badge">LIVE INPUT</span></div>
           <div className="metric-row"><label><span>Temperature</span><strong>{inputs.temperature_c.toFixed(1)}<small>°C</small></strong><input type="range" min="-10" max="60" step="0.5" value={inputs.temperature_c} onChange={(e) => update('temperature_c', Number(e.target.value))} /></label><label><span>Humidity</span><strong>{inputs.humidity_percent}<small>%</small></strong><input type="range" min="0" max="100" value={inputs.humidity_percent} onChange={(e) => update('humidity_percent', Number(e.target.value))} /></label></div>

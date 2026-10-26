@@ -6,7 +6,7 @@
 
 The project aims to demonstrate a smarter approach to fan management through rule-based automation, user preference adaptation, and simulated energy-use analytics. Its initial prototype focuses on a virtual room and fan environment, allowing the proposed automation logic to be demonstrated and tested without requiring physical hardware.
 
-> **Project status:** Working software prototype. This repository includes a persistent FastAPI backend, deterministic rule engine, SQLite history, energy estimates, automated tests, and a responsive React dashboard. It does not directly control a physical fan.
+> **Project status:** Working software prototype. This repository includes a persistent FastAPI backend, deterministic rule engine, SQLite history, energy estimates, automated tests, a responsive React dashboard, live WebSocket updates, and browser-based BLE service discovery. Physical fan control is intentionally not enabled: Atomberg documents IR remotes for conventional fans and does not publish a model-specific BLE command protocol here.
 
 ## ✅ Run the implemented project
 
@@ -40,6 +40,7 @@ The dashboard uses `http://localhost:8000` by default. Set `VITE_API_BASE_URL` b
 |---|---|---|
 | GET | `/api/health` | Service health check |
 | POST | `/api/recommendations` | Validate conditions, evaluate rules, and persist a recommendation |
+| WebSocket | `/api/realtime` | Broadcast recommendations to all connected dashboard clients |
 | GET | `/api/history` | Retrieve recent decisions |
 | DELETE | `/api/history` | Clear local decision history |
 | POST | `/api/energy` | Calculate scenario estimates from stated power assumptions |
